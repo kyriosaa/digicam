@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digicam Images</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0; }
+        h2 { margin-top: 20px; }
+        #image-container { 
+            display: flex; 
+            flex-wrap: wrap; 
+            justify-content: center; 
+            gap: 10px;
+            padding: 10px;
+        }
+        img { 
+            width: 50%; 
+            border-radius: 10px; 
+        }
+    </style>
+</head>
+<body>
+    <h2>Uploaded Images</h2>
+    <div id="image-container"></div>
+
+    <script>
+        async function loadImages() {
+            const response = await fetch("/images");
+            const images = await response.json();
+            const container = document.getElementById("image-container");
+            container.innerHTML = "";
+            images.reverse().forEach(img => {
+                const imageElement = document.createElement("img");
+                imageElement.src = "/uploads/" + img;
+                container.appendChild(imageElement);
+            });
+        }
+
+        loadImages();
+        setInterval(loadImages, 5000);
+    </script>
+</body>
+</html>
