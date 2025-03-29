@@ -3,13 +3,13 @@ import os
 
 app = Flask(__name__)
 PICS_FOLDER = "uploads"
-os.makedirs(PICS_FOLDER, exist_ok=True)
+os.makedirs(PICS_FOLDER, exist_ok = True)
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/upload', methods=['POST'])
+@app.route('/upload', methods = ['POST'])
 def upload_file():
     if 'file' not in request.files:
         return "No file part", 400
@@ -28,8 +28,8 @@ def get_uploaded_file(filename):
 
 @app.route('/images')
 def list_images():
-    files = sorted(os.listdir(PICS_FOLDER), key=lambda x: os.path.getmtime(os.path.join(PICS_FOLDER, x)))
+    files = sorted(os.listdir(PICS_FOLDER), key = lambda x: os.path.getmtime(os.path.join(PICS_FOLDER, x)))
     return jsonify(files)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host = '0.0.0.0', port = 5000)
