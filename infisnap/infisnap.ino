@@ -1,128 +1,84 @@
-#include "WiFi.h"
 #include "esp_camera.h"
-#include "esp_timer.h"
-#include "img_converters.h"
-#include "Arduino.h"
-#include "soc/soc.h"           // Disable brownout problems
-#include "soc/rtc_cntl_reg.h"  // Disable brownout problems
-#include "driver/rtc_io.h"
-#include <HTTPClient.h>
-#include <FS.h>
-#include <SD_MMC.h>
-#include "env.h"
+#include "esp_sleep.h"
 
-const char* ssid = SSID;
-const char* password = PASSWORD;
-const char* serverURL = SERVER_URL;
+// Use GPIO13 as the wakeup pin
+#define WAKEUP_PIN 13
 
-boolean takeNewPhoto = false;
-#define FILE_PHOTO "/photo.jpg"
-#define BUTTON_PIN 13  
-
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
-
-void IRAM_ATTR buttonISR() {
-    takeNewPhoto = true;
-}
+// Camera pin configuration (AI-Thinker module)
+#define PWDN_GPIO_NUM    32
+#define RESET_GPIO_NUM   -1
+#define XCLK_GPIO_NUM     0
+#define SIOD_GPIO_NUM    26
+#define SIOC_GPIO_NUM    27
+#define Y9_GPIO_NUM      35
+#define Y8_GPIO_NUM      34
+#define Y7_GPIO_NUM      39
+#define Y6_GPIO_NUM      36
+#define Y5_GPIO_NUM      21
+#define Y4_GPIO_NUM      19
+#define Y3_GPIO_NUM      18
+#define Y2_GPIO_NUM       5
+#define VSYNC_GPIO_NUM   25
+#define HREF_GPIO_NUM    23
+#define PCLK_GPIO_NUM    22
 
 void setup() {
-    Serial.begin(115200);
-    WiFi.begin(ssid, password);
-    unsigned long startAttemptTime = millis();
+  Serial.begin(115200);
 
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
-        delay(1000);
-        Serial.println("Connecting to WiFi...");
-    }
-    
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Failed to connect to WiFi");
+  // Detect wakeup cause
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("Woke up from button press!");
+
+    // Init camera
+    camera_config_t config;
+    config.ledc_channel = LEDC_CHANNEL_0;
+    config.ledc_timer = LEDC_TIMER_0;
+    config.pin_d0 = Y2_GPIO_NUM;
+    config.pin_d1 = Y3_GPIO_NUM;
+    config.pin_d2 = Y4_GPIO_NUM;
+    config.pin_d3 = Y5_GPIO_NUM;
+    config.pin_d4 = Y6_GPIO_NUM;
+    config.pin_d5 = Y7_GPIO_NUM;
+    config.pin_d6 = Y8_GPIO_NUM;
+    config.pin_d7 = Y9_GPIO_NUM;
+    config.pin_xclk = XCLK_GPIO_NUM;
+    config.pin_pclk = PCLK_GPIO_NUM;
+    config.pin_vsync = VSYNC_GPIO_NUM;
+    config.pin_href = HREF_GPIO_NUM;
+    config.pin_sscb_sda = SIOD_GPIO_NUM;
+    config.pin_sscb_scl = SIOC_GPIO_NUM;
+    config.pin_pwdn = PWDN_GPIO_NUM;
+    config.pin_reset = RESET_GPIO_NUM;
+    config.xclk_freq_hz = 20000000;
+    config.pixel_format = PIXFORMAT_JPEG;
+    config.frame_size = FRAMESIZE_QVGA;
+    config.jpeg_quality = 10;
+    config.fb_count = 1;
+
+    esp_camera_init(&config);
+
+    // Capture photo
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (!fb) {
+      Serial.println("Camera capture failed");
     } else {
-        Serial.println("WiFi connected");
+      Serial.println("Photo taken");
+      // Save to SD or process here
+      esp_camera_fb_return(fb);
     }
 
-    if (!SD_MMC.begin()) {
-        Serial.println("SD Card Mount Failed");
-        return;
-    }
+    // Optional: deinit camera
+    esp_camera_deinit();
+  }
 
-    pinMode(BUTTON_PIN, INPUT_PULLUP);  // Configure button pin
-    attachInterrupt(BUTTON_PIN, buttonISR, FALLING);  // Attach interrupt
+  // Configure wakeup pin (active LOW)
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);
+
+  Serial.println("Going to sleep...");
+  delay(1000); // Short delay to let serial output flush
+  esp_deep_sleep_start();
 }
 
 void loop() {
-    if (takeNewPhoto) {
-        capturePhotoSaveSD();
-        takeNewPhoto = false;
-
-        if (WiFi.status() == WL_CONNECTED) {
-            uploadImages();
-        }
-    }
-    delay(1);
-}
-
-void capturePhotoSaveSD() {
-    camera_fb_t * fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println("Camera capture failed");
-        return;
-    }
-    
-    File file = SD_MMC.open(FILE_PHOTO, FILE_WRITE);
-    if (!file) {
-        Serial.println("Failed to open file for writing");
-    } else {
-        file.write(fb->buf, fb->len);
-        Serial.println("Photo saved to SD card");
-    }
-    file.close();
-    esp_camera_fb_return(fb);
-}
-
-void uploadImages() {
-    File file = SD_MMC.open(FILE_PHOTO);
-    if (!file) {
-        Serial.println("No image to upload");
-        return;
-    }
-
-    HTTPClient http;
-    http.begin(serverURL);
-    http.addHeader("Content-Type", "image/jpeg");
-
-    int fileSize = file.size();
-    uint8_t* buffer = (uint8_t*)malloc(fileSize);
-    if (!buffer) {
-        Serial.println("Memory allocation failed");
-        return;
-    }
-
-    file.read(buffer, fileSize);
-    int httpResponseCode = http.POST(buffer, fileSize);
-    free(buffer);
-    file.close();
-    http.end();
-
-    if (httpResponseCode == 200) {
-        Serial.println("Upload successful, deleting file.");
-        SD_MMC.remove(FILE_PHOTO);
-    } else {
-        Serial.println("Upload failed");
-    }
+  // Will never run
 }
