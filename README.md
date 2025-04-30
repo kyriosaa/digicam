@@ -12,7 +12,6 @@
 - **Camera -** Includes a 2 megapixel camera.
 - **Automatic Uploads -** When in range of your personal wifi, the InfiSnap automatically uploads the images taken onto your server.
 - **Photo Gallery -** Allows for photos uploaded to your server to be automatically posted onto a website.
-- **Portable & Rugged Design -** InfiSnap comes packaged in a small, lightweight, and durable design, perfect for carrying in your bag while doing your daily errands.
 
 ## Hardware Components
 
