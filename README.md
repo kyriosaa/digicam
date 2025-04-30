@@ -5,8 +5,6 @@
 - A work-in-progress digital camera that simulates a point-and-shoot camera.
 - C++
 
-<!-- ![alt text](https://github.com/kyriosaa/axis/blob/main/images/axis1.JPG "Axis Image 1") -->
-
 ## Features
 
 - **Camera -** Includes a 2 megapixel camera.
