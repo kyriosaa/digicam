@@ -19,8 +19,13 @@ def upload_file():
         return "No selected file", 400
 
     file_path = os.path.join(PICS_FOLDER, file.filename)
+    
+    # Check if file already exists
+    if os.path.exists(file_path):
+        return f"File '{file.filename}' already exists, skipping upload", 409
+    
     file.save(file_path)
-    return "File uploaded successfully", 200
+    return f"File '{file.filename}' uploaded successfully", 200
 
 @app.route('/uploads/<filename>')
 def get_uploaded_file(filename):
