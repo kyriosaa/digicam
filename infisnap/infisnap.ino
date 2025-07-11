@@ -30,101 +30,90 @@
 // save image to SD card
 void saveImageToSD(camera_fb_t * fb) {
   if (!SD_MMC.begin()) {
-    Serial.println("SD Card not available");
     return;
   }
   
-  // create filename with timestamp (simple millis)
-  String filename = "/photo_" + String(millis()) + ".jpg";
+  // basically will generate a random file name for the image
+  uint32_t bootCount = esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED ? 
+                       esp_random() : millis();
+  uint32_t randomNum = esp_random() % 10000;
+  
+  String filename = "/photo_" + String(bootCount) + "_" + String(randomNum) + ".jpg";
   
   File file = SD_MMC.open(filename, FILE_WRITE);
   if (!file) {
-    Serial.println("Failed to open file for writing");
     return;
   }
   
   file.write(fb->buf, fb->len);
   file.close();
-  
-  Serial.println("Image saved to SD card: " + filename);
-  Serial.println("Image size: " + String(fb->len) + " bytes");
 }
 
 // upload image to server from file path
 bool uploadFileToServer(String filePath) {
+  Serial.println("Uploading: " + filePath);
+  
   if (!SD_MMC.begin()) {
-    Serial.println("SD Card not available for upload");
+    Serial.println("SD failed in upload");
     return false;
   }
   
   File file = SD_MMC.open(filePath);
   if (!file) {
-    Serial.println("Failed to open file: " + filePath);
+    Serial.println("File open failed: " + filePath);
     return false;
   }
   
   size_t fileSize = file.size();
+  Serial.println("File size: " + String(fileSize));
+  
+  if (fileSize > 50000) { // skip any files larger than 50KB bcs it will crash
+    Serial.println("File too large, skipping");
+    file.close();
+    return false;
+  }
+  
+  // read file into buffer
+  uint8_t* fileBuffer = (uint8_t*)malloc(fileSize);
+  if (!fileBuffer) {
+    Serial.println("Memory allocation failed");
+    file.close();
+    return false;
+  }
+  
+  file.read(fileBuffer, fileSize);
+  file.close();
+  Serial.println("File read complete");
   
   HTTPClient http;
+  Serial.println("Starting HTTP request to: " + String(SERVER_URL));
   http.begin(SERVER_URL);
+  http.addHeader("Content-Type", "application/octet-stream");
   
-  // set content type for multipart form data
-  String boundary = "----ESP32CAM";
-  http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-  
-  // extract filename from path
+  // get file name from path
   String filename = filePath;
   if (filename.startsWith("/")) {
     filename = filename.substring(1);
   }
+  http.addHeader("X-Filename", filename);
+  Serial.println("Headers set, filename: " + filename);
   
-  // create multipart form data
-  String body = "--" + boundary + "\r\n";
-  body += "Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n";
-  body += "Content-Type: image/jpeg\r\n\r\n";
+  // send POST request with raw file data
+  Serial.println("Sending POST request...");
+  int httpResponseCode = http.POST(fileBuffer, fileSize);
+  Serial.println("Response code: " + String(httpResponseCode));
   
-  String footer = "\r\n--" + boundary + "--\r\n";
+  free(fileBuffer);
+  http.end();
   
-  // calc total length
-  int totalLength = body.length() + fileSize + footer.length();
-  http.addHeader("Content-Length", String(totalLength));
-  
-  // send request
-  WiFiClient * client = http.getStreamPtr();
-  client->print(body);
-  
-  // read and send file in chunks
-  uint8_t buffer[1024];
-  while (file.available()) {
-    size_t bytesRead = file.read(buffer, sizeof(buffer));
-    client->write(buffer, bytesRead);
-  }
-  file.close();
-  
-  client->print(footer);
-  
-  int httpResponseCode = http.POST("");
-  
-  if (httpResponseCode > 0) {
-    String response = http.getString();
-    Serial.println("Upload successful for: " + filename);
-    Serial.println("Response code: " + String(httpResponseCode));
-    Serial.println("Response: " + response);
-    http.end();
-    return true;
-  } else {
-    Serial.println("Upload failed for: " + filename);
-    Serial.println("Error code: " + String(httpResponseCode));
-    http.end();
-    return false;
-  }
+  return (httpResponseCode == 200);
 }
 
 // upload all images from SD card to server
 void uploadAllImages() {
   // check if wifi credentials are properly added in env
   #ifndef SSID
-    Serial.println("WiFi credentials not found in env.h");
+    Serial.println("No WiFi credentials");
     return;
   #endif
   
@@ -140,23 +129,21 @@ void uploadAllImages() {
   }
   
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWiFi connection failed");
+    Serial.println("\nWiFi failed");
     return;
   }
   
   Serial.println("\nWiFi connected!");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
   
   // list all jpg files on SD card
   File root = SD_MMC.open("/");
   if (!root) {
-    Serial.println("Failed to open SD card root directory");
+    Serial.println("SD root failed");
     WiFi.disconnect();
     return;
   }
   
-  Serial.println("Scanning SD card for images...");
+  Serial.println("Scanning for images...");
   int totalFiles = 0;
   int uploadedFiles = 0;
   int skippedFiles = 0;
@@ -166,15 +153,17 @@ void uploadAllImages() {
     String fileName = file.name();
     if (fileName.endsWith(".jpg") || fileName.endsWith(".JPG")) {
       totalFiles++;
-      Serial.println("Found image: " + fileName);
+      Serial.println("Found: " + fileName);
       
       String filePath = "/" + fileName;
       bool uploaded = uploadFileToServer(filePath);
       
       if (uploaded) {
         uploadedFiles++;
+        Serial.println("Uploaded: " + fileName);
       } else {
         skippedFiles++;
+        Serial.println("Failed: " + fileName);
       }
       
       delay(500); // small delay between uploads
@@ -184,29 +173,32 @@ void uploadAllImages() {
   }
   root.close();
   
-  Serial.println("Upload summary:");
-  Serial.println("Total images found: " + String(totalFiles));
-  Serial.println("Successfully uploaded: " + String(uploadedFiles));
-  Serial.println("Failed/Skipped: " + String(skippedFiles));
-  
+  Serial.println("Upload summary: " + String(uploadedFiles) + "/" + String(totalFiles));
   WiFi.disconnect();
 }
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);
+  Serial.println("ESP32 Starting...");
 
   // detect wakeup cause
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
-    Serial.println("Woke up from button press!");
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  Serial.println("Wakeup reason: " + String(wakeup_reason));
+  
+  // On first boot or button press, take photo and upload
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED) {
+    Serial.println("Taking photo and uploading...");
 
     // init SD card
     if (!SD_MMC.begin()) {
-      Serial.println("SD Card Mount Failed");
+      Serial.println("SD Card failed");
     } else {
-      Serial.println("SD Card mounted successfully");
+      Serial.println("SD Card OK");
     }
 
     // init cam
+    Serial.println("Initializing camera...");
     camera_config_t config;
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer = LEDC_TIMER_0;
@@ -229,30 +221,70 @@ void setup() {
     config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
     config.frame_size = FRAMESIZE_QVGA;
-    config.jpeg_quality = 10;
+    config.jpeg_quality = 12;
     config.fb_count = 1;
 
-    esp_camera_init(&config);
+    esp_err_t err = esp_camera_init(&config);
+    if (err != ESP_OK) {
+      Serial.println("Camera init failed");
+    } else {
+      Serial.println("Camera OK");
+      
+      sensor_t * s = esp_camera_sensor_get();
+      if (s) {
+        // img white balance
+        s->set_whitebal(s, 1);       
+        s->set_awb_gain(s, 1);       
+        
+        // img exposure
+        s->set_exposure_ctrl(s, 1); 
+        s->set_aec2(s, 0);           
+        s->set_ae_level(s, 0);       
+        
+        // img gain
+        s->set_gain_ctrl(s, 1);     
+        s->set_agc_gain(s, 0);       
+        
+        // img adjustments
+        s->set_brightness(s, 1);    
+        s->set_contrast(s, 0);       
+        s->set_saturation(s, -2);    
+        
+        // sfx
+        s->set_special_effect(s, 0); 
+        
+        // color bar test pattern
+        s->set_colorbar(s, 0);
+      }
+    }
 
     // take photo
+    Serial.println("Taking photo...");
     camera_fb_t * fb = esp_camera_fb_get();
     if (!fb) {
-      Serial.println("Camera capture failed");
+      Serial.println("Photo failed");
     } else {
-      Serial.println("Photo taken");
+      Serial.println("Photo taken, size: " + String(fb->len));
       
       // save img to SD card
       saveImageToSD(fb);
+      Serial.println("Photo saved to SD");
       
       esp_camera_fb_return(fb);
     }
 
     // deinit cam
     esp_camera_deinit();
+    Serial.println("Camera deinitialized");
+    
+    // delay and free memory before upload
+    delay(2000);
+    Serial.println("Free heap before upload: " + String(ESP.getFreeHeap()));
     
     // try to upload all images from SD card to server
-    Serial.println("Attempting to upload all images to server...");
+    Serial.println("Starting upload...");
     uploadAllImages();
+    Serial.println("Upload complete");
   }
 
   // config wakeup pin (active LOW)
